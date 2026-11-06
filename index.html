@@ -177,7 +177,7 @@ class Playground extends Phaser.Scene {
       const distance=Phaser.Math.Distance.Between(x,y,o.x,o.y);
       if(distance>145)continue;
       const intensity=1-distance/145,angle=Math.atan2(o.y-y,o.x-x);
-      if(o.body)this.matter.body.applyForce(o.body,{x:o.x,y:o.y},{x:Math.cos(angle)*.085*intensity,y:Math.sin(angle)*.085*intensity-.035*intensity});
+      if(o.body)o.applyForce({x:Math.cos(angle)*.085*intensity,y:Math.sin(angle)*.085*intensity-.035*intensity});
       if(o.getData('kind')==='rat'&&distance<106)this.popRat(o);
       if(o.getData('kind')==='block'&&distance<60)this.hitBlock(o,7);
     }
