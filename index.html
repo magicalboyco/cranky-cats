@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#9ed8f4">
+<title>Cranky Cats — Playground 0.1</title>
+<style>
+  html,body{margin:0;width:100%;height:100%;background:#83c9ef;overflow:hidden;touch-action:none;font-family:system-ui,-apple-system,sans-serif}
+  #game{width:100%;height:100%;display:flex;align-items:center;justify-content:center}
+  canvas{display:block;touch-action:none}
+  #rotate{display:none;position:fixed;inset:0;z-index:5;background:#214d6b;color:white;align-items:center;justify-content:center;text-align:center;padding:25px;box-sizing:border-box;font-size:22px}
+  @media (orientation:portrait) and (max-width:750px){#rotate{display:flex}}
+</style>
+</head>
+<body>
+<div id="game"></div>
+<div id="rotate">🐱 Rotate your device to landscape to play Cranky Cats!</div>
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.90.0/dist/phaser.min.js"></script>
+<script>
+'use strict';
+const W=960,H=540,SLING={x:172,y:353}, CAT_COL=0xffa13b;
+class Playground extends Phaser.Scene {
+  constructor(){super('play');}
+  create(){
+    this.score=0;this.ammo=4;this.shots=0;this.rats=[];this.blocks=[];this.projectiles=[];this.dragging=false;this.abilityUsed=false;this.cat=null;this.finished=false;this.shotStarted=0;this.nextQueued=false;
+    this.makeArt();
+    this.paintBackdrop();
+    this.matter.world.setBounds(0,0,W,H,32,true,true,false,true);
+    this.matter.world.engine.gravity.y=1.2;
+    this.add.image(480,492,'grass').setDisplaySize(960,96);
+    this.matter.add.rectangle(480,510,960,60,{isStatic:true,label:'ground',friction:0.9});
+    this.add.image(155,395,'wood').setDisplaySize(20,100).setDepth(3);
+    this.add.image(190,395,'wood').setDisplaySize(18,100).setDepth(3);
+    this.add.image(173,440,'wood').setDisplaySize(82,15).setDepth(3);
+    this.add.image(172,352,'slingCup').setDepth(6);
+    this.add.text(27,18,'CRANKY CATS',{fontFamily:'system-ui',fontSize:'37px',fontStyle:'900',color:'#29435a',stroke:'#fff7df',strokeThickness:6}).setDepth(12);
+    this.add.text(29,66,'Furball vs. the Rats  •  Level 1',{fontFamily:'system-ui',fontSize:'17px',color:'#284d5b'}).setDepth(12);
+    this.scoreText=this.add.text(735,24,'SCORE  0',{fontSize:'24px',fontFamily:'system-ui',fontStyle:'bold',color:'#28435b'}).setDepth(12);
+    this.birdsText=this.add.text(735,57,'CATS LEFT  4',{fontSize:'17px',fontFamily:'system-ui',color:'#28435b'}).setDepth(12);
+    this.instruction=this.add.text(480,104,'Drag Furball back and release! Tap in flight to cough up a hairball.',{fontSize:'17px',fontFamily:'system-ui',color:'#3d4f54',align:'center',backgroundColor:'#ffffffaa',padding:{x:12,y:7}}).setOrigin(.5).setDepth(12);
+    const retry=this.add.text(24,486,'↻  RESTART',{fontSize:'20px',fontFamily:'system-ui',fontStyle:'bold',color:'#ffffff',backgroundColor:'#3a7890',padding:{x:11,y:7}}).setDepth(15).setInteractive({useHandCursor:true});
+    retry.on('pointerdown',()=>this.scene.restart());
+    this.fortress();
+    this.aimLines=this.add.graphics().setDepth(2);
+    this.elastic=this.add.graphics().setDepth(4);
+    this.createCat();
+    this.input.on('pointerdown',pointer=>{
+      if(this.finished||!this.cat)return;
+      const p=this.worldPoint(pointer);
+      if(!this.cat.launched&&Phaser.Math.Distance.Between(p.x,p.y,this.cat.x,this.cat.y)<90){this.dragging=true;this.pullTo(p);return;}
+      if(this.cat.launched&&!this.abilityUsed){this.hairball();return;}
+    });
+    this.input.on('pointermove',pointer=>{if(this.dragging)this.pullTo(this.worldPoint(pointer));});
+    this.input.on('pointerup',()=>{if(this.dragging){this.dragging=false;this.launch();}});
+    this.matter.world.on('collisionstart',event=>{
+      for(const pair of event.pairs){
+        const objs=[pair.bodyA.gameObject,pair.bodyB.gameObject].filter(Boolean);
+        for(const obj of objs){
+          if(!obj.active||obj.getData('dead'))continue;
+          const other=objs.find(x=>x!==obj);
+          const speed=Math.hypot(obj.body?.velocity?.x||0,obj.body?.velocity?.y||0);
+          const otherSpeed=Math.hypot(other?.body?.velocity?.x||0,other?.body?.velocity?.y||0);
+          const relative=Math.max(speed,otherSpeed);
+          if(obj.getData('kind')==='rat'&&relative>2.3)this.hitRat(obj,relative);
+          if(obj.getData('kind')==='block'&&relative>3.8)this.hitBlock(obj,relative);
+        }
+      }
+    });
+    this.time.addEvent({delay:650,loop:true,callback:()=>this.checkProgress()});
+    this.drawElastic();
+  }
+  worldPoint(pointer){return {x:pointer.worldX,y:pointer.worldY};}
+  makeArt(){
+    const draw=(name,w,h,paint)=>{const g=this.make.graphics({x:0,y:0},false);paint(g);g.generateTexture(name,w,h);g.destroy();};
+    draw('furball',78,78,g=>{
+      g.fillStyle(0xe98626);g.fillCircle(39,40,34);g.lineStyle(3,0x683d31);g.strokeCircle(39,40,34);
+      g.fillStyle(0xe98626);g.fillTriangle(13,22,8,7,34,17);g.fillTriangle(45,17,71,7,65,23);
+      g.lineStyle(3,0x683d31);g.strokeTriangle(13,22,8,7,34,17);g.strokeTriangle(45,17,71,7,65,23);
+      g.fillStyle(0xfab071);g.fillCircle(20,54,9);g.fillCircle(59,54,9);
+      g.lineStyle(4,0x59372c);g.lineBetween(21,37,34,41);g.lineBetween(57,37,45,41);
+      g.fillStyle(0x723d34);g.fillTriangle(35,52,43,52,39,57);g.lineStyle(2,0x723d34);g.lineBetween(39,57,39,62);
+      g.lineStyle(4,0xb75a21);g.lineBetween(38,9,42,23);g.lineBetween(29,12,34,25);g.lineBetween(49,13,46,24);
+    });
+    draw('rat',49,52,g=>{
+      g.fillStyle(0xe6a4ae);g.fillCircle(11,16,10);g.fillCircle(39,16,10);
+      g.fillStyle(0x8a8293);g.fillCircle(25,28,21);g.lineStyle(2,0x494657);g.strokeCircle(25,28,21);
+      g.fillStyle(0xffffff);g.fillCircle(18,26,6);g.fillCircle(32,26,6);
+      g.fillStyle(0x262b36);g.fillCircle(20,27,3);g.fillCircle(34,27,3);
+      g.fillStyle(0xf19aa8);g.fillCircle(26,37,5);g.lineStyle(2,0x494657);g.lineBetween(21,43,28,43);
+    });
+    draw('wood',68,28,g=>{g.fillStyle(0xc38d51);g.fillRoundedRect(1,1,66,26,3);g.lineStyle(3,0x8d6038);g.strokeRoundedRect(1,1,66,26,3);g.lineStyle(2,0xe1b27a,.9);g.lineBetween(10,7,55,7);g.lineBetween(14,20,49,20);});
+    draw('stone',68,28,g=>{g.fillStyle(0xaab0bd);g.fillRoundedRect(1,1,66,26,3);g.lineStyle(3,0x777f92);g.strokeRoundedRect(1,1,66,26,3);g.lineStyle(2,0xdde0e6);g.lineBetween(8,7,57,7);});
+    draw('grass',100,30,g=>{g.fillStyle(0x75be64);g.fillRect(0,0,100,30);g.fillStyle(0x5eaa4f);for(let x=0;x<100;x+=11)g.fillTriangle(x,2,x+5,-8,x+10,2);});
+    draw('hairball',36,36,g=>{g.fillStyle(0x754c35);g.fillCircle(18,18,15);g.lineStyle(3,0xb18a60);g.strokeCircle(18,18,13);g.lineBetween(7,16,26,22);g.lineBetween(12,8,22,30);});
+    draw('slingCup',30,25,g=>{g.fillStyle(0x704c34);g.fillRoundedRect(2,8,26,14,6);});
+  }
+  paintBackdrop(){
+    const g=this.add.graphics();
+    g.fillGradientStyle(0x9bd9f5,0x9bd9f5,0xe0f6ff,0xe0f6ff);g.fillRect(0,0,W,H);
+    g.fillStyle(0xffefb2);g.fillCircle(855,109,48);
+    const cloud=(x,y,s)=>{g.fillStyle(0xffffff,.75);g.fillEllipse(x,y,115*s,31*s);g.fillCircle(x-25*s,y-9*s,22*s);g.fillCircle(x+12*s,y-17*s,29*s);};
+    cloud(185,125,.8);cloud(445,69,.75);cloud(685,145,.6);
+    g.fillStyle(0xb5daac);g.fillEllipse(210,467,550,185);g.fillEllipse(800,462,580,170);
+    g.fillStyle(0x93cb83);g.fillEllipse(530,474,800,125);
+    g.fillStyle(0x77b869);g.fillRect(0,464,960,76);
+  }
+  fortress(){
+    const block=(x,y,w,h,type='wood')=>{
+      const o=this.matter.add.image(x,y,type).setDisplaySize(w,h);
+      o.setBody({type:'rectangle',width:w,height:h},{friction:0.8,restitution:0.04,density:type==='stone'?.0028:.0015});
+      o.setData('kind','block');o.setData('hp',type==='stone'?2:1);o.setDepth(5);this.blocks.push(o);return o;
+    };
+    const rat=(x,y)=>{
+      const r=this.matter.add.image(x,y,'rat');
+      r.setCircle(20);r.setFriction(.7);r.setBounce(.1);r.setData('kind','rat');r.setData('dead',false);r.setDepth(6);this.rats.push(r);
+    };
+    block(675,433,24,76);block(815,433,24,76);
+    block(745,382,194,22);rat(743,349);
+    block(690,321,24,104);block(801,321,24,104);
+    block(745,259,158,24,'stone');rat(744,222);
+    block(658,233,24,60);block(831,233,24,60);
+    block(745,194,205,21);
+    rat(635,450);
+    // A deliberately unstable stack for the first physics experiment.
+    block(880,440,34,64,'wood');
+  }
+  createCat(){
+    if(this.ammo<=0)return;
+    this.cat=this.add.image(SLING.x,SLING.y,'furball').setScale(.92).setDepth(5);
+    this.cat.launched=false;this.abilityUsed=false;this.nextQueued=false;
+    this.birdsText.setText('CATS LEFT  '+this.ammo);
+    this.drawElastic();
+  }
+  pullTo(p){
+    const dx=p.x-SLING.x,dy=p.y-SLING.y,d=Math.hypot(dx,dy)||1,max=95;
+    this.cat.setPosition(SLING.x+dx*Math.min(1,max/d),SLING.y+dy*Math.min(1,max/d));
+    this.drawElastic();this.aimLines.clear();
+    this.aimLines.fillStyle(0xffffff,.68);
+    const vx=(SLING.x-this.cat.x)*.17,vy=(SLING.y-this.cat.y)*.17,grav=.6;
+    for(let t=4;t<50;t+=4){const x=SLING.x+vx*t,y=SLING.y+vy*t+grav*t*t/2;if(x>W||y>460||x<0)break;this.aimLines.fillCircle(x,y,Math.max(2.5,5-t*.06));}
+  }
+  drawElastic(){
+    this.elastic.clear();
+    if(!this.cat||this.cat.launched)return;
+    this.elastic.lineStyle(7,0x65402e);this.elastic.lineBetween(154,324,this.cat.x-7,this.cat.y+7);this.elastic.lineBetween(192,325,this.cat.x+8,this.cat.y+7);
+  }
+  launch(){
+    const dx=SLING.x-this.cat.x,dy=SLING.y-this.cat.y;
+    if(Math.hypot(dx,dy)<12){this.cat.setPosition(SLING.x,SLING.y);this.drawElastic();return;}
+    const x=this.cat.x,y=this.cat.y;
+    this.cat.destroy();
+    const c=this.matter.add.image(x,y,'furball').setScale(.92).setCircle(31);
+    c.setFriction(.6);c.setFrictionAir(.001);c.setBounce(.48);c.setDensity(.004);c.setDepth(7);
+    c.setVelocity(dx*.17,dy*.17);c.setAngularVelocity(.1);
+    c.launched=true;c.setData('kind','cat');this.cat=c;
+    this.shots++;this.ammo--;this.shotStarted=this.time.now;
+    this.birdsText.setText('CATS LEFT  '+this.ammo);
+    this.aimLines.clear();this.elastic.clear();this.instruction.setText('Tap anywhere to release Furball’s hairball!');
+  }
+  hairball(){
+    if(!this.cat||!this.cat.launched||this.abilityUsed)return;
+    this.abilityUsed=true;
+    const x=this.cat.x+24,y=this.cat.y+18;
+    const ball=this.matter.add.image(x,y,'hairball').setCircle(15).setDensity(.005).setBounce(.25).setDepth(8);
+    ball.setVelocity((this.cat.body.velocity.x||0)*.75+2,(this.cat.body.velocity.y||0)*.75+5);
+    ball.setData('kind','hairball');this.projectiles.push(ball);
+    this.instruction.setText('HAIRBALL! Watch the rats tumble!');
+    this.time.delayedCall(570,()=>{if(ball.active)this.explode(ball.x,ball.y,ball);});
+  }
+  explode(x,y,ball){
+    if(ball.active){this.matter.world.remove(ball.body);ball.destroy();}
+    const flash=this.add.circle(x,y,13,0xf9cc78,.75).setDepth(10);
+    this.tweens.add({targets:flash,radius:118,alpha:0,duration:350,onComplete:()=>flash.destroy()});
+    for(const o of [...this.rats,...this.blocks]){
+      if(!o.active||o.getData('dead'))continue;
+      const distance=Phaser.Math.Distance.Between(x,y,o.x,o.y);
+      if(distance>145)continue;
+      const intensity=1-distance/145,angle=Math.atan2(o.y-y,o.x-x);
+      if(o.body)this.matter.body.applyForce(o.body,{x:o.x,y:o.y},{x:Math.cos(angle)*.085*intensity,y:Math.sin(angle)*.085*intensity-.035*intensity});
+      if(o.getData('kind')==='rat'&&distance<106)this.popRat(o);
+      if(o.getData('kind')==='block'&&distance<60)this.hitBlock(o,7);
+    }
+  }
+  hitRat(o,speed){
+    if(o.getData('dead'))return;
+    const old=o.getData('hits')||0;o.setData('hits',old+1);
+    if(speed>4.2||old>=1)this.popRat(o);
+  }
+  popRat(o){
+    if(!o.active||o.getData('dead'))return;
+    o.setData('dead',true);this.score+=5000;this.scoreText.setText('SCORE  '+this.score);
+    this.add.text(o.x,o.y-36,'+5000',{fontSize:'23px',fontStyle:'bold',fontFamily:'system-ui',color:'#ffffff',stroke:'#437b5b',strokeThickness:5}).setDepth(13);
+    this.time.delayedCall(10,()=>{if(o.active){this.matter.world.remove(o.body);o.destroy();}});
+  }
+  hitBlock(o,speed){
+    if(!o.active||o.getData('dead'))return;
+    const hp=o.getData('hp')-1;o.setData('hp',hp);
+    if(hp<=0&&speed>5.2){
+      o.setData('dead',true);this.score+=350;this.scoreText.setText('SCORE  '+this.score);
+      this.time.delayedCall(10,()=>{if(o.active){this.matter.world.remove(o.body);o.destroy();}});
+    }
+  }
+  checkProgress(){
+    if(this.finished)return;
+    for(const r of this.rats){if(r.active&&(r.y>480||r.x>930))this.popRat(r);}
+    if(this.rats.every(r=>!r.active||r.getData('dead'))){this.finish(true);return;}
+    if(!this.cat||!this.cat.launched)return;
+    const elapsed=this.time.now-this.shotStarted,speed=Math.hypot(this.cat.body?.velocity?.x||0,this.cat.body?.velocity?.y||0);
+    if(elapsed>2400&&(speed<1.4||elapsed>8500||this.cat.x>W-30)&&!this.nextQueued){
+      this.nextQueued=true;
+      this.time.delayedCall(850,()=>{
+        if(this.finished)return;
+        if(this.cat&&this.cat.active){this.matter.world.remove(this.cat.body);this.cat.destroy();}
+        this.cat=null;
+        if(this.ammo>0){this.createCat();this.instruction.setText('Drag to aim. Release to launch. Tap in flight for a hairball.');}
+        else this.finish(false);
+      });
+    }
+  }
+  finish(won){
+    if(this.finished)return;this.finished=true;
+    if(won){this.score+=this.ammo*10000;this.scoreText.setText('SCORE  '+this.score);}
+    const overlay=this.add.rectangle(480,268,570,240,0x173d56,.9).setDepth(20);
+    this.add.text(480,216,won?'🐱  CATS WIN!':'🐀  RATS WIN THIS ROUND',{fontSize:'36px',fontStyle:'bold',fontFamily:'system-ui',color:'#ffffff'}).setOrigin(.5).setDepth(21);
+    this.add.text(480,276,won?'Score: '+this.score+'   •   Unused cats bonus included':'Out of cats — try attacking the tower supports!',{fontSize:'20px',fontFamily:'system-ui',color:'#f7e3b8'}).setOrigin(.5).setDepth(21);
+    const btn=this.add.text(480,327,'PLAY AGAIN ↻',{fontSize:'23px',fontFamily:'system-ui',fontStyle:'bold',color:'#1f4a62',backgroundColor:'#ffffff',padding:{x:16,y:10}}).setOrigin(.5).setDepth(22).setInteractive();
+    btn.on('pointerdown',()=>this.scene.restart());
+  }
+}
+new Phaser.Game({type:Phaser.AUTO,parent:'game',width:W,height:H,backgroundColor:'#9bd9f5',scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_BOTH},physics:{default:'matter',matter:{gravity:{y:1.2},debug:false,enableSleeping:false}},scene:[Playground],render:{antialias:true}});
+</script>
+</body>
+</html>
